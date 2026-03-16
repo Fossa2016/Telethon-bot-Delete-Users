@@ -334,18 +334,26 @@ async def kick_now(event):
         await event.reply("/kick @username")
         return
 
-    username = parts[1].replace("@", "")
-
+    target = parts[1].strip()
+    
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT user_id FROM users WHERE username=$1 AND chat_id=$2",
-            username, group_id
-        )
-
+        if target.startswith("@"):
+            value = target[1:]
+            row = await conn.fetchrow(
+                "SELECT user_id FROM users WHERE username=$1 AND chat_id=$2 LIMIT 1",
+                value, group_id
+            )
+        else:
+            value = target
+            row = await conn.fetchrow(
+                "SELECT user_id FROM users WHERE first_name=$1 AND chat_id=$2 LIMIT 1",
+                value, group_id
+            )
+    
     if not row:
         await event.reply("Пользователь не найден в базе. Выполните /sync")
         return
-
+    
     user_id = row["user_id"]
 
     try:
@@ -365,7 +373,7 @@ async def kick_now(event):
                 group_id, user_id
             )
 
-        await event.reply(f"@{username} удалён ✅")
+        await event.reply(f"{target} удалён ✅")
 
     except Exception as e:
         await event.reply(f"Ошибка: {e}")
@@ -393,20 +401,28 @@ async def add_delayed_kick(event):
         await event.reply("/add @username seconds")
         return
 
-    username = parts[1].replace("@", "")
-
+    target = parts[1].strip()
+    
     try:
         seconds = int(parts[2])
     except ValueError:
         await event.reply("seconds должен быть числом")
         return
-
+    
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT user_id FROM users WHERE username=$1 AND chat_id=$2",
-            username, group_id
-        )
-
+        if target.startswith("@"):
+            value = target[1:]
+            row = await conn.fetchrow(
+                "SELECT user_id FROM users WHERE username=$1 AND chat_id=$2 LIMIT 1",
+                value, group_id
+            )
+        else:
+            value = target
+            row = await conn.fetchrow(
+                "SELECT user_id FROM users WHERE first_name=$1 AND chat_id=$2 LIMIT 1",
+                value, group_id
+            )
+    
     if not row:
         await event.reply("Пользователь не найден в базе. Выполните /sync")
         return
@@ -420,7 +436,7 @@ async def add_delayed_kick(event):
             group_id, user_id, kick_at
         )
 
-    await event.reply(f"@{username} будет удалён через {seconds} сек ⏳")
+    await event.reply(f"{target} будет удалён через {seconds} сек ⏳")
 
 
 # ============ ФОНОВЫЙ КИКЕР ============
