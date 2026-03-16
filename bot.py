@@ -474,18 +474,16 @@ async def kick_loop():
 async def main():
     await init_db()
 
-    # Запускаем user-client (нужен код с телефона при первом запуске)
-    await user_client.start(phone=PHONE)
+    await user_client.connect()
+    if not await user_client.is_user_authorized():
+        raise RuntimeError("USER_SESSION невалидна или отсутствует")
     print("User-client запущен")
 
-    # Запускаем бота
     await bot_client.start(bot_token=BOT_TOKEN)
     print("Bot-client запущен")
 
-    # Запускаем фоновый кикер
     asyncio.create_task(kick_loop())
 
-    # Держим оба клиента запущенными
     await asyncio.gather(
         user_client.run_until_disconnected(),
         bot_client.run_until_disconnected()
