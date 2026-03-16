@@ -1,36 +1,26 @@
 import asyncio
 import os
+import shlex
 import time
 
 import asyncpg
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from telethon.tl.functions.channels import EditBannedRequest
 from telethon.tl.types import ChatBannedRights
 
 # ============ КОНФИГ ============
 
-API_ID = int(os.getenv("API_ID"))          # с my.telegram.org
-API_HASH = os.getenv("API_HASH")            # с my.telegram.org
-PHONE = os.getenv("PHONE")                  # номер телефона
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
 DATABASE_URL = os.getenv("DATABASE_URL")
-BOT_TOKEN = os.getenv("BOT_TOKEN")          # токен обычного бота для интерфейса
-
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+USER_SESSION = os.getenv("USER_SESSION")
 
 # ============ КЛИЕНТЫ ============
 
-# # User-client для парсинга и кика
-# user_client = TelegramClient('user_session', API_ID, API_HASH)
-
-# # Bot-client для команд (через Telethon, не aiogram)
-# bot_client = TelegramClient('bot_session', API_ID, API_HASH)
-
-from telethon.sessions import StringSession
-
-USER_SESSION = os.getenv("USER_SESSION")
-BOT_SESSION = os.getenv("BOT_SESSION")
-
 user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH)
-bot_client = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH)
+bot_client = TelegramClient('bot_session', API_ID, API_HASH)
 
 pool = None
 
@@ -48,9 +38,16 @@ async def init_db():
                 user_id BIGINT,
                 username TEXT,
                 first_name TEXT,
+                last_name TEXT,
+                display_name TEXT,
                 PRIMARY KEY(chat_id, user_id)
             )
         """)
+
+        # Если таблица уже существует без новых колонок — добавляем их
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT")
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS managers(
                 admin_id BIGINT,
@@ -83,24 +80,50 @@ async def sync_members(chat_id):
         entity = await user_client.get_entity(chat_id)
         participants = await user_client.get_participants(entity, aggressive=True)
 
+        saved = 0
         async with pool.acquire() as conn:
-            # Очищаем старые записи для этого чата
             await conn.execute("DELETE FROM users WHERE chat_id=$1", chat_id)
 
             for user in participants:
                 if user.bot:
                     continue
-                await conn.execute("""
-                    INSERT INTO users (chat_id, user_id, username, first_name)
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (chat_id, user_id)
-                    DO UPDATE SET username=$3, first_name=$4
-                """, chat_id, user.id, user.username, user.first_name)
 
-        return len(participants)
+                display_name = " ".join(filter(None, [user.first_name, user.last_name]))
+
+                await conn.execute("""
+                    INSERT INTO users (chat_id, user_id, username, first_name, last_name, display_name)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (chat_id, user_id)
+                    DO UPDATE SET username=$3, first_name=$4, last_name=$5, display_name=$6
+                """, chat_id, user.id, user.username, user.first_name, user.last_name, display_name)
+
+                saved += 1
+
+        return saved
     except Exception as e:
         print(f"Ошибка синхронизации: {e}")
         return -1
+
+
+# ============ ПОИСК ПОЛЬЗОВАТЕЛЯ ============
+
+async def find_user(conn, target, group_id):
+    """
+    Ищет пользователя:
+    - @username → по username
+    - "Имя Фамилия" или просто Имя → по display_name
+    """
+    if target.startswith("@"):
+        value = target[1:]
+        return await conn.fetchrow(
+            "SELECT user_id, display_name FROM users WHERE username=$1 AND chat_id=$2 LIMIT 1",
+            value, group_id
+        )
+    else:
+        return await conn.fetchrow(
+            "SELECT user_id, display_name FROM users WHERE display_name=$1 AND chat_id=$2 LIMIT 1",
+            target, group_id
+        )
 
 
 # ============ КОМАНДЫ БОТА ============
@@ -115,10 +138,10 @@ async def start(event):
         "/link <id или @username канала> — привязать канал\n"
         "/groups — список привязанных каналов\n"
         "/select <group_id> — выбрать канал\n"
-        "/sync — загрузить всех участников выбранного канала в базу\n"
+        "/sync — загрузить участников в базу\n"
         "/list — показать участников из базы\n"
-        "/add @username seconds — удалить через N секунд\n"
-        "/kick @username — удалить немедленно\n"
+        '/kick @username или /kick "Имя Фамилия" — удалить сразу\n'
+        '/add @username 60 или /add "Имя Фамилия" 60 — удалить через N сек\n'
         "/count — количество участников в базе"
     )
 
@@ -130,23 +153,17 @@ async def link_group(event):
 
     parts = event.text.split(maxsplit=1)
     if len(parts) != 2:
-        await event.reply("/link <id или @username канала>")
+        await event.reply("Использование: /link <id или @username канала>")
         return
 
     target = parts[1].strip()
 
     try:
-        # Получаем entity через user-client (он видит каналы)
         entity = await user_client.get_entity(target)
         chat_id = entity.id
 
-        # Telethon для каналов возвращает id без минуса
-        # Но в Telegram Bot API каналы имеют префикс -100
-        # Приведём к формату -100...
         if hasattr(entity, 'broadcast') or hasattr(entity, 'megagroup'):
-            chat_id_full = -1000000000000 - chat_id if chat_id > 0 else chat_id
-            # Правильный формат
-            chat_id_full = int(f"-100{chat_id}")
+            chat_id_full = int(f"-100{chat_id}") if chat_id > 0 else chat_id
         else:
             chat_id_full = chat_id
 
@@ -195,7 +212,7 @@ async def select_group(event):
 
     parts = event.text.split()
     if len(parts) != 2:
-        await event.reply("/select <group_id>")
+        await event.reply("Использование: /select <group_id>")
         return
 
     try:
@@ -270,7 +287,7 @@ async def list_users(event):
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT username, first_name, user_id FROM users WHERE chat_id=$1 LIMIT 50",
+            "SELECT username, display_name, user_id FROM users WHERE chat_id=$1 LIMIT 50",
             group_id
         )
 
@@ -281,7 +298,8 @@ async def list_users(event):
     text = "**Участники (первые 50):**\n\n"
     for row in rows:
         uname = f"@{row['username']}" if row['username'] else "без username"
-        text += f"• {row['first_name']} — {uname} — `{row['user_id']}`\n"
+        name = row['display_name'] or "без имени"
+        text += f"• {name} — {uname} — `{row['user_id']}`\n"
 
     await event.reply(text)
 
@@ -329,32 +347,27 @@ async def kick_now(event):
 
     group_id = selected["group_id"]
 
-    parts = event.text.split()
+    try:
+        parts = shlex.split(event.text)
+    except ValueError:
+        await event.reply('Ошибка в кавычках. Пример: /kick @username или /kick "Имя Фамилия"')
+        return
+
     if len(parts) != 2:
-        await event.reply("/kick @username")
+        await event.reply('Использование: /kick @username или /kick "Имя Фамилия"')
         return
 
     target = parts[1].strip()
-    
+
     async with pool.acquire() as conn:
-        if target.startswith("@"):
-            value = target[1:]
-            row = await conn.fetchrow(
-                "SELECT user_id FROM users WHERE username=$1 AND chat_id=$2 LIMIT 1",
-                value, group_id
-            )
-        else:
-            value = target
-            row = await conn.fetchrow(
-                "SELECT user_id FROM users WHERE first_name=$1 AND chat_id=$2 LIMIT 1",
-                value, group_id
-            )
-    
+        row = await find_user(conn, target, group_id)
+
     if not row:
         await event.reply("Пользователь не найден в базе. Выполните /sync")
         return
-    
+
     user_id = row["user_id"]
+    display = row["display_name"] or target
 
     try:
         await user_client(EditBannedRequest(
@@ -366,14 +379,13 @@ async def kick_now(event):
             )
         ))
 
-        # Удаляем из базы
         async with pool.acquire() as conn:
             await conn.execute(
                 "DELETE FROM users WHERE chat_id=$1 AND user_id=$2",
                 group_id, user_id
             )
 
-        await event.reply(f"{target} удалён ✅")
+        await event.reply(f"{display} удалён ✅")
 
     except Exception as e:
         await event.reply(f"Ошибка: {e}")
@@ -396,38 +408,33 @@ async def add_delayed_kick(event):
 
     group_id = selected["group_id"]
 
-    parts = event.text.split()
+    try:
+        parts = shlex.split(event.text)
+    except ValueError:
+        await event.reply('Ошибка в кавычках. Пример: /add @username 60 или /add "Имя Фамилия" 60')
+        return
+
     if len(parts) != 3:
-        await event.reply("/add @username seconds")
+        await event.reply('Использование: /add @username 60 или /add "Имя Фамилия" 60')
         return
 
     target = parts[1].strip()
-    
+
     try:
         seconds = int(parts[2])
     except ValueError:
-        await event.reply("seconds должен быть числом")
+        await event.reply("Второй аргумент должен быть числом (секунды)")
         return
-    
+
     async with pool.acquire() as conn:
-        if target.startswith("@"):
-            value = target[1:]
-            row = await conn.fetchrow(
-                "SELECT user_id FROM users WHERE username=$1 AND chat_id=$2 LIMIT 1",
-                value, group_id
-            )
-        else:
-            value = target
-            row = await conn.fetchrow(
-                "SELECT user_id FROM users WHERE first_name=$1 AND chat_id=$2 LIMIT 1",
-                value, group_id
-            )
-    
+        row = await find_user(conn, target, group_id)
+
     if not row:
         await event.reply("Пользователь не найден в базе. Выполните /sync")
         return
 
     user_id = row["user_id"]
+    display = row["display_name"] or target
     kick_at = time.time() + seconds
 
     async with pool.acquire() as conn:
@@ -436,7 +443,7 @@ async def add_delayed_kick(event):
             group_id, user_id, kick_at
         )
 
-    await event.reply(f"{target} будет удалён через {seconds} сек ⏳")
+    await event.reply(f"{display} будет удалён через {seconds} сек ⏳")
 
 
 # ============ ФОНОВЫЙ КИКЕР ============
@@ -462,7 +469,6 @@ async def kick_loop():
                         ))
                         print(f"Кикнут {row['user_id']} из {row['chat_id']}")
 
-                        # Удаляем ТОЛЬКО после успешного кика
                         await conn.execute(
                             "DELETE FROM pending_kicks WHERE id=$1",
                             row["id"]
@@ -474,8 +480,6 @@ async def kick_loop():
 
                     except Exception as e:
                         print(f"Ошибка кика {row['user_id']}: {e}")
-                        # Запись остаётся в pending_kicks →
-                        # бот попробует снова через 30 сек
 
                     await asyncio.sleep(3)
 
