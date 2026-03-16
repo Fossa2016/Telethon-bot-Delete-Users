@@ -15,11 +15,6 @@ PHONE = os.getenv("PHONE")                  # номер телефона
 DATABASE_URL = os.getenv("DATABASE_URL")
 BOT_TOKEN = os.getenv("BOT_TOKEN")          # токен обычного бота для интерфейса
 
-# API_ID = "31429075"          # с my.telegram.org
-# API_HASH = "5eb6516abe81114a6474bb1251efa6f7"            # с my.telegram.org
-# PHONE = "+79494580642"                 # номер телефона
-# DATABASE_URL = ""
-# BOT_TOKEN = "8430074361:AAEKWEX7uC8-9tPmxKolNm9ocD7iPaRga4M"         # токен обычного бота для интерфейса
 
 # ============ КЛИЕНТЫ ============
 
