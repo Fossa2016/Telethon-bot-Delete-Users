@@ -445,6 +445,50 @@ async def add_delayed_kick(event):
 
     await event.reply(f"{display} будет удалён через {seconds} сек ⏳")
 
+# ============ АВТОДОБАВЛЕНИЕ НОВЫХ УЧАСТНИКОВ ============
+
+@user_client.on(events.ChatAction)
+async def on_user_joined(event):
+    """Когда кто-то вступает в группу/канал — добавляем в базу"""
+    if not event.user_joined and not event.user_added:
+        return
+
+    try:
+        user = await event.get_user()
+        if user is None or user.bot:
+            return
+
+        chat = await event.get_chat()
+        chat_id = chat.id
+
+        # Приводим к формату -100...
+        if hasattr(chat, 'broadcast') or hasattr(chat, 'megagroup'):
+            chat_id_full = int(f"-100{chat_id}") if chat_id > 0 else chat_id
+        else:
+            chat_id_full = chat_id
+
+        display_name = " ".join(filter(None, [user.first_name, user.last_name]))
+
+        async with pool.acquire() as conn:
+            # Проверяем, что этот чат вообще отслеживается
+            is_managed = await conn.fetchval(
+                "SELECT 1 FROM managers WHERE group_id=$1 LIMIT 1",
+                chat_id_full
+            )
+            if not is_managed:
+                return
+
+            await conn.execute("""
+                INSERT INTO users (chat_id, user_id, username, first_name, last_name, display_name)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (chat_id, user_id)
+                DO UPDATE SET username=$3, first_name=$4, last_name=$5, display_name=$6
+            """, chat_id_full, user.id, user.username, user.first_name, user.last_name, display_name)
+
+        print(f"Новый участник: {display_name} ({user.id}) в {chat_id_full}")
+
+    except Exception as e:
+        print(f"Ошибка автодобавления: {e}")
 
 # ============ ФОНОВЫЙ КИКЕР ============
 
