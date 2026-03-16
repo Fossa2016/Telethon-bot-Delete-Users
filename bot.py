@@ -15,13 +15,27 @@ PHONE = os.getenv("PHONE")                  # номер телефона
 DATABASE_URL = os.getenv("DATABASE_URL")
 BOT_TOKEN = os.getenv("BOT_TOKEN")          # токен обычного бота для интерфейса
 
+# API_ID = "31429075"          # с my.telegram.org
+# API_HASH = "5eb6516abe81114a6474bb1251efa6f7"            # с my.telegram.org
+# PHONE = "+79494580642"                 # номер телефона
+# DATABASE_URL = ""
+# BOT_TOKEN = "8430074361:AAEKWEX7uC8-9tPmxKolNm9ocD7iPaRga4M"         # токен обычного бота для интерфейса
+
 # ============ КЛИЕНТЫ ============
 
-# User-client для парсинга и кика
-user_client = TelegramClient('user_session', API_ID, API_HASH)
+# # User-client для парсинга и кика
+# user_client = TelegramClient('user_session', API_ID, API_HASH)
 
-# Bot-client для команд (через Telethon, не aiogram)
-bot_client = TelegramClient('bot_session', API_ID, API_HASH)
+# # Bot-client для команд (через Telethon, не aiogram)
+# bot_client = TelegramClient('bot_session', API_ID, API_HASH)
+
+from telethon.sessions import StringSession
+
+USER_SESSION = os.getenv("USER_SESSION")
+BOT_SESSION = os.getenv("BOT_SESSION")
+
+user_client = TelegramClient(StringSession(USER_SESSION), API_ID, API_HASH)
+bot_client = TelegramClient(StringSession(BOT_SESSION), API_ID, API_HASH)
 
 pool = None
 

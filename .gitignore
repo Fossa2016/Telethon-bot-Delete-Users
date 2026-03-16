@@ -1,3 +1,5 @@
 venv/
 __pycache__/
 Dockerfile
+*session
+make_session.py
