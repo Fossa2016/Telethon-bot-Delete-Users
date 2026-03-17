@@ -16,6 +16,7 @@ API_HASH = os.getenv("API_HASH")
 DATABASE_URL = os.getenv("DATABASE_URL")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 USER_SESSION = os.getenv("USER_SESSION")
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(",")))
 
 # ============ КЛИЕНТЫ ============
 
@@ -30,7 +31,7 @@ pool = None
 async def init_db():
     global pool
     pool = await asyncpg.create_pool(DATABASE_URL)
-
+    
     async with pool.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users(
@@ -132,6 +133,10 @@ async def find_user(conn, target, group_id):
 async def start(event):
     if not event.is_private:
         return
+    
+    if not is_admin(event.sender_id):
+        return
+    
     await event.reply(
         "Бот для удаления участников каналов/групп.\n\n"
         "Команды:\n"
@@ -149,6 +154,9 @@ async def start(event):
 @bot_client.on(events.NewMessage(pattern='/link'))
 async def link_group(event):
     if not event.is_private:
+        return
+    
+    if not is_admin(event.sender_id):
         return
 
     parts = event.text.split(maxsplit=1)
@@ -187,6 +195,9 @@ async def link_group(event):
 async def groups_list(event):
     if not event.is_private:
         return
+    
+    if not is_admin(event.sender_id):
+        return
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -208,6 +219,9 @@ async def groups_list(event):
 @bot_client.on(events.NewMessage(pattern='/select'))
 async def select_group(event):
     if not event.is_private:
+        return
+    
+    if not is_admin(event.sender_id):
         return
 
     parts = event.text.split()
@@ -246,6 +260,9 @@ async def select_group(event):
 async def sync_command(event):
     if not event.is_private:
         return
+    
+    if not is_admin(event.sender_id):
+        return
 
     async with pool.acquire() as conn:
         selected = await conn.fetchrow(
@@ -271,6 +288,9 @@ async def sync_command(event):
 @bot_client.on(events.NewMessage(pattern='/list'))
 async def list_users(event):
     if not event.is_private:
+        return
+    
+    if not is_admin(event.sender_id):
         return
 
     async with pool.acquire() as conn:
@@ -308,6 +328,9 @@ async def list_users(event):
 async def count_users(event):
     if not event.is_private:
         return
+    
+    if not is_admin(event.sender_id):
+        return
 
     async with pool.acquire() as conn:
         selected = await conn.fetchrow(
@@ -333,6 +356,9 @@ async def count_users(event):
 @bot_client.on(events.NewMessage(pattern='/kick'))
 async def kick_now(event):
     if not event.is_private:
+        return
+    
+    if not is_admin(event.sender_id):
         return
 
     async with pool.acquire() as conn:
@@ -393,9 +419,13 @@ async def kick_now(event):
 
 @bot_client.on(events.NewMessage(pattern='/add'))
 async def add_delayed_kick(event):
+
     if not event.is_private:
         return
-
+    
+    if not is_admin(event.sender_id):
+        return
+    
     async with pool.acquire() as conn:
         selected = await conn.fetchrow(
             "SELECT group_id FROM selected_group WHERE admin_id=$1",
@@ -532,6 +562,8 @@ async def kick_loop():
 
         await asyncio.sleep(30)
 
+def is_admin(user_id):
+    return user_id in ADMIN_IDS
 
 # ============ ЗАПУСК ============
 
